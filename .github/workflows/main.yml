@@ -29,12 +29,7 @@ jobs:
         run: |
           cd $KERNEL_DIR
           VER=$(grep -r "PLATFORM_VERSION" -n . 2>/dev/null | head -n 1 | grep -oE '[0-9]+' | head -n 1)
-          if [ -z "$VER" ]; then
-            VER=$(grep -r "Android" -n . 2>/dev/null | grep -oE '[0-9]+' | head -n 1)
-          fi
-          if [ -z "$VER" ]; then
-            VER="13"
-          fi
+          if [ -z "$VER" ]; then VER=13; fi
           echo "ANDROID_VER=$VER" >> $GITHUB_ENV
 
       - name: Setup Toolchain
@@ -47,11 +42,23 @@ jobs:
           TC=$(find $PWD -type d -name "*clang*" | head -n 1)
           echo "TC_PATH=$TC/bin" >> $GITHUB_ENV
 
-      - name: Setup SukiSU
+      - name: Integrate KernelSU
         run: |
           cd $KERNEL_DIR
-          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
-          cp -r sukisu/kernel/* .
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+
+      - name: Integrate SukiSU
+        run: |
+          cd $KERNEL_DIR/drivers
+          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
+
+          if ! grep -q "sukisu" Kconfig; then
+            echo 'source "drivers/sukisu/Kconfig"' >> Kconfig
+          fi
+
+          if ! grep -q "sukisu" Makefile; then
+            echo 'obj-$(CONFIG_KSU) += sukisu/' >> Makefile
+          fi
 
       - name: Detect Defconfig
         run: |
@@ -77,6 +84,7 @@ jobs:
 
           echo 'CONFIG_LOCALVERSION="-natkernel-testing"' >> out/.config
           echo 'CONFIG_LOCALVERSION_AUTO=n' >> out/.config
+          echo 'CONFIG_KSU=y' >> out/.config
 
           make -j$(nproc) O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
@@ -100,18 +108,14 @@ jobs:
 
       - name: Generate Changelog
         run: |
-          echo "NatKernel Test Build" > changelog.txt
+          echo "NatKernel KernelSU + SukiSU Build" > changelog.txt
           echo "" >> changelog.txt
           echo "Device: Samsung Galaxy A22 4G (A225F)" >> changelog.txt
           echo "Android Version: $ANDROID_VER" >> changelog.txt
           echo "Build: $KERNEL_NAME" >> changelog.txt
           echo "Date: $BUILD_DATE" >> changelog.txt
           echo "Compiler: Neutron Clang" >> changelog.txt
-          echo "SukiSU: Integrated" >> changelog.txt
-          echo "" >> changelog.txt
-          echo "Notes:" >> changelog.txt
-          echo "- Auto detected Android version" >> changelog.txt
-          echo "- CI build system active" >> changelog.txt
+          echo "Root: KernelSU + SukiSU Ultra" >> changelog.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
