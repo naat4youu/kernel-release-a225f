@@ -20,9 +20,14 @@ jobs:
         run: |
           wget https://github.com/naat4youu/kernel-release-a225f/releases/download/skibidi1/SM-A225F_EUR_13_Opensource.zip -O source.zip
           unzip source.zip
-          DIR=$(find . -maxdepth 3 -type d -name kernel | head -n 1)
-          if [ -z "$DIR" ]; then DIR=$(find . -maxdepth 3 -type d | grep -i kernel | head -n 1); fi
+
+          DIR=$(find . -type f -name Makefile | grep -m1 "/kernel/Makefile" | sed 's|/Makefile||')
+          if [ -z "$DIR" ]; then
+            DIR=$(find . -type d -name kernel | head -n 1)
+          fi
+
           cd $DIR
+          ls
           echo "KERNEL_DIR=$PWD" >> $GITHUB_ENV
 
       - name: Detect Android Version
@@ -42,6 +47,11 @@ jobs:
           TC=$(find $PWD -type d -name "*clang*" | head -n 1)
           echo "TC_PATH=$TC/bin" >> $GITHUB_ENV
 
+      - name: Verify Kernel Path
+        run: |
+          cd $KERNEL_DIR
+          test -d drivers || (echo "drivers folder missing" && exit 1)
+
       - name: Integrate KernelSU
         run: |
           cd $KERNEL_DIR
@@ -52,12 +62,12 @@ jobs:
           cd $KERNEL_DIR/drivers
           git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
 
-          if ! grep -q "sukisu" Kconfig; then
-            echo 'source "drivers/sukisu/Kconfig"' >> Kconfig
+          if ! grep -q "sukisu" ../drivers/Kconfig; then
+            echo 'source "drivers/sukisu/Kconfig"' >> ../drivers/Kconfig
           fi
 
-          if ! grep -q "sukisu" Makefile; then
-            echo 'obj-$(CONFIG_KSU) += sukisu/' >> Makefile
+          if ! grep -q "sukisu" ../drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += sukisu/' >> ../drivers/Makefile
           fi
 
       - name: Detect Defconfig
