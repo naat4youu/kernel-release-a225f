@@ -1,0 +1,124 @@
+name: Build A22 Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Prepare
+        run: |
+          sudo apt update
+          sudo apt install -y git wget unzip bc bison flex libssl-dev cpio curl python3 android-sdk-libsparse-utils
+
+      - name: Download Source
+        run: |
+          wget https://github.com/naat4youu/kernel-release-a225f/releases/download/skibidi1/SM-A225F_EUR_13_Opensource.zip -O source.zip
+          unzip source.zip
+          DIR=$(find . -maxdepth 3 -type d -name kernel | head -n 1)
+          if [ -z "$DIR" ]; then DIR=$(find . -maxdepth 3 -type d | grep -i kernel | head -n 1); fi
+          cd $DIR
+          echo "KERNEL_DIR=$PWD" >> $GITHUB_ENV
+
+      - name: Detect Android Version
+        run: |
+          cd $KERNEL_DIR
+          VER=$(grep -r "PLATFORM_VERSION" -n . 2>/dev/null | head -n 1 | grep -oE '[0-9]+' | head -n 1)
+          if [ -z "$VER" ]; then
+            VER=$(grep -r "Android" -n . 2>/dev/null | grep -oE '[0-9]+' | head -n 1)
+          fi
+          if [ -z "$VER" ]; then
+            VER="13"
+          fi
+          echo "ANDROID_VER=$VER" >> $GITHUB_ENV
+
+      - name: Setup Toolchain
+        run: |
+          cd $KERNEL_DIR
+          mkdir toolchain
+          cd toolchain
+          bash <(curl -s "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman") -S=10032024
+          bash <(curl -s "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman") --patch=glibc
+          TC=$(find $PWD -type d -name "*clang*" | head -n 1)
+          echo "TC_PATH=$TC/bin" >> $GITHUB_ENV
+
+      - name: Setup SukiSU
+        run: |
+          cd $KERNEL_DIR
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
+          cp -r sukisu/kernel/* .
+
+      - name: Detect Defconfig
+        run: |
+          cd $KERNEL_DIR
+          DEF=$(ls arch/arm64/configs | grep -Ei "a22|a225|mt" | head -n 1)
+          echo "DEFCONFIG=$DEF" >> $GITHUB_ENV
+
+      - name: Set Version
+        run: |
+          DATE=$(date +%Y%m%d)
+          VERSION=SM-A225F_natkernel_A${ANDROID_VER}_${DATE}_r${GITHUB_RUN_NUMBER}
+          echo "KERNEL_NAME=$VERSION" >> $GITHUB_ENV
+          echo "BUILD_DATE=$(date)" >> $GITHUB_ENV
+
+      - name: Build Kernel
+        run: |
+          cd $KERNEL_DIR
+          export PATH=$TC_PATH:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+
+          make O=out $DEFCONFIG
+
+          echo 'CONFIG_LOCALVERSION="-natkernel-testing"' >> out/.config
+          echo 'CONFIG_LOCALVERSION_AUTO=n' >> out/.config
+
+          make -j$(nproc) O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+      - name: Pack boot.img
+        run: |
+          cd $KERNEL_DIR
+          IMG=$(find out -name "Image.gz-dtb" | head -n 1)
+          mkdir boot
+          cp $IMG boot/
+          cd boot
+          echo "ramdisk" > ramdisk.cpio
+          gzip ramdisk.cpio
+          mkbootimg --kernel Image.gz-dtb --ramdisk ramdisk.cpio.gz --output ${KERNEL_NAME}.img || true
+          echo "BOOT=$(pwd)/${KERNEL_NAME}.img" >> $GITHUB_ENV
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: natkernel-a22
+          path: ${{ env.BOOT }}
+
+      - name: Generate Changelog
+        run: |
+          echo "NatKernel Test Build" > changelog.txt
+          echo "" >> changelog.txt
+          echo "Device: Samsung Galaxy A22 4G (A225F)" >> changelog.txt
+          echo "Android Version: $ANDROID_VER" >> changelog.txt
+          echo "Build: $KERNEL_NAME" >> changelog.txt
+          echo "Date: $BUILD_DATE" >> changelog.txt
+          echo "Compiler: Neutron Clang" >> changelog.txt
+          echo "SukiSU: Integrated" >> changelog.txt
+          echo "" >> changelog.txt
+          echo "Notes:" >> changelog.txt
+          echo "- Auto detected Android version" >> changelog.txt
+          echo "- CI build system active" >> changelog.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.KERNEL_NAME }}
+          name: ${{ env.KERNEL_NAME }}
+          body_path: changelog.txt
+          files: ${{ env.BOOT }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
