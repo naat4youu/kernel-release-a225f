@@ -14,17 +14,27 @@ jobs:
       - name: Prepare
         run: |
           sudo apt update
-          sudo apt install -y git wget unzip bc bison flex libssl-dev cpio curl python3 android-sdk-libsparse-utils
+          sudo apt install -y git wget unzip tar bc bison flex libssl-dev cpio curl python3 android-sdk-libsparse-utils
 
-      - name: Download Source
+      - name: Extract Source Properly
         run: |
           wget https://github.com/naat4youu/kernel-release-a225f/releases/download/skibidi1/SM-A225F_EUR_13_Opensource.zip -O source.zip
           unzip source.zip
 
-          DIR=$(find . -type f -name Makefile | head -n 1 | sed 's|/Makefile||')
+          TAR=$(find . -name "Kernel.tar.gz" | head -n 1)
+          tar -xzf "$TAR"
+
+          DIR=$(find . -type f -name Makefile | grep -v toolchain | head -n 1 | sed 's|/Makefile||')
           cd $DIR
+
           echo "KERNEL_DIR=$PWD" >> $GITHUB_ENV
           ls
+
+      - name: Verify Kernel
+        run: |
+          cd $KERNEL_DIR
+          test -d drivers || (echo "drivers missing" && exit 1)
+          test -d arch || (echo "arch missing" && exit 1)
 
       - name: Detect Android Version
         run: |
@@ -48,13 +58,13 @@ jobs:
           cd $KERNEL_DIR
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-      - name: Integrate SukiSU (arch drivers fix)
+      - name: Integrate SukiSU
         run: |
-          cd $KERNEL_DIR/arch/drivers
+          cd $KERNEL_DIR/drivers
           git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
 
           if ! grep -q "sukisu" Kconfig; then
-            echo 'source "arch/drivers/sukisu/Kconfig"' >> Kconfig
+            echo 'source "drivers/sukisu/Kconfig"' >> Kconfig
           fi
 
           if ! grep -q "sukisu" Makefile; then
