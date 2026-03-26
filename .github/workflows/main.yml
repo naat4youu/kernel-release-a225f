@@ -14,7 +14,7 @@ jobs:
       - name: Prepare
         run: |
           sudo apt update
-          sudo apt install -y git wget unzip tar bc bison flex libssl-dev cpio curl python3 android-sdk-libsparse-utils
+          sudo apt install -y git wget unzip tar bc bison flex libssl-dev cpio curl python3 clang lld
 
       - name: Extract Source
         run: |
@@ -31,43 +31,30 @@ jobs:
             fi
           done
 
-      - name: Setup GCC Toolchain
+      - name: Force Clean Samsung Toolchain
         run: |
           cd $KERNEL_DIR
-          mkdir gcc64
-          cd gcc64
-          git clone --depth=1 https://github.com/mvaisakh/gcc-arm64.git .
-          echo "GCC64=$(pwd)/bin/aarch64-linux-gnu-" >> $GITHUB_ENV
+          find . -type f -name Makefile -exec sed -i 's|../toolchain/.*||g' {} +
 
-      - name: Setup Clang
+      - name: Setup Clang Proper
         run: |
-          cd $KERNEL_DIR
-          mkdir clang
-          cd clang
-          bash <(curl -s https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman) -S=10032024
-          TC=$(find . -type d -name "*clang*" | head -n 1)
-          echo "CLANG=$(pwd)/$TC/bin" >> $GITHUB_ENV
+          echo "CLANG_PATH=$(which clang)" >> $GITHUB_ENV
+          echo "LD_PATH=$(which ld.lld)" >> $GITHUB_ENV
 
       - name: Integrate KernelSU
         run: |
           cd $KERNEL_DIR
           curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash -
 
-      - name: Integrate SukiSU (FIXED)
+      - name: Integrate SukiSU
         run: |
           cd $KERNEL_DIR
           git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
-
           mkdir -p drivers/sukisu
           cp -r SukiSU-Ultra/kernel/* drivers/sukisu/
 
-          if ! grep -q "sukisu" drivers/Kconfig; then
-            echo 'source "drivers/sukisu/Kconfig"' >> drivers/Kconfig
-          fi
-
-          if ! grep -q "sukisu" drivers/Makefile; then
-            echo 'obj-$(CONFIG_KSU) += sukisu/' >> drivers/Makefile
-          fi
+          echo 'source "drivers/sukisu/Kconfig"' >> drivers/Kconfig
+          echo 'obj-$(CONFIG_KSU) += sukisu/' >> drivers/Makefile
 
       - name: Detect Defconfig
         run: |
@@ -75,15 +62,9 @@ jobs:
           DEF=$(ls arch/arm64/configs | head -n 1)
           echo "DEFCONFIG=$DEF" >> $GITHUB_ENV
 
-      - name: Set Version
-        run: |
-          DATE=$(date +%Y%m%d)
-          echo "KERNEL_NAME=natkernel_${DATE}_r${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
-
-      - name: Build Kernel (HYBRID GCC + CLANG)
+      - name: Build Kernel (LLVM ONLY)
         run: |
           cd $KERNEL_DIR
-          export PATH=$CLANG:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
 
@@ -91,12 +72,13 @@ jobs:
 
           echo 'CONFIG_LOCALVERSION="-natkernel-testing"' >> out/.config
           echo 'CONFIG_KSU=y' >> out/.config
+          sed -i 's/CONFIG_CC_STACKPROTECTOR_STRONG=y/CONFIG_CC_STACKPROTECTOR_NONE=y/g' out/.config
 
           make -j$(nproc) O=out \
             CC=clang \
             LD=ld.lld \
-            CROSS_COMPILE=$GCC64 \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            LLVM=1 \
+            LLVM_IAS=1
 
       - name: Pack boot.img
         run: |
@@ -107,8 +89,8 @@ jobs:
           cd boot
           echo "ramdisk" > ramdisk.cpio
           gzip ramdisk.cpio
-          mkbootimg --kernel Image.gz-dtb --ramdisk ramdisk.cpio.gz --output ${KERNEL_NAME}.img || true
-          echo "BOOT=$(pwd)/${KERNEL_NAME}.img" >> $GITHUB_ENV
+          mkbootimg --kernel Image.gz-dtb --ramdisk ramdisk.cpio.gz --output natkernel.img || true
+          echo "BOOT=$(pwd)/natkernel.img" >> $GITHUB_ENV
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -119,8 +101,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.KERNEL_NAME }}
-          name: ${{ env.KERNEL_NAME }}
+          tag_name: natkernel-${{ github.run_number }}
+          name: natkernel-${{ github.run_number }}
           files: ${{ env.BOOT }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
