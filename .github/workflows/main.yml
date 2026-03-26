@@ -16,7 +16,7 @@ jobs:
           sudo apt update
           sudo apt install -y git wget unzip tar bc bison flex libssl-dev cpio curl python3 android-sdk-libsparse-utils
 
-      - name: Extract Source Properly
+      - name: Extract Source
         run: |
           wget https://github.com/naat4youu/kernel-release-a225f/releases/download/skibidi1/SM-A225F_EUR_13_Opensource.zip -O source.zip
           unzip source.zip
@@ -24,93 +24,79 @@ jobs:
           TAR=$(find . -name "Kernel.tar.gz" | head -n 1)
           tar -xzf "$TAR"
 
-          echo "Searching kernel root..."
-
-          FOUND=""
           for d in $(find . -type d); do
             if [ -f "$d/Makefile" ] && [ -d "$d/arch" ] && [ -d "$d/drivers" ]; then
-              FOUND="$d"
+              echo "KERNEL_DIR=$d" >> $GITHUB_ENV
               break
             fi
           done
 
-          if [ -z "$FOUND" ]; then
-            echo "Kernel root not found"
-            exit 1
-          fi
-
-          echo "FOUND KERNEL ROOT: $FOUND"
-          echo "KERNEL_DIR=$FOUND" >> $GITHUB_ENV
-
-      - name: Verify Kernel
+      - name: Setup GCC Toolchain
         run: |
           cd $KERNEL_DIR
-          ls
-          test -d drivers || (echo "drivers missing" && exit 1)
-          test -d arch || (echo "arch missing" && exit 1)
+          mkdir gcc64
+          cd gcc64
+          git clone --depth=1 https://github.com/mvaisakh/gcc-arm64.git .
+          echo "GCC64=$(pwd)/bin/aarch64-linux-gnu-" >> $GITHUB_ENV
 
-      - name: Detect Android Version
+      - name: Setup Clang
         run: |
           cd $KERNEL_DIR
-          VER=$(grep -r "PLATFORM_VERSION" -n . 2>/dev/null | head -n 1 | grep -oE '[0-9]+' | head -n 1)
-          if [ -z "$VER" ]; then VER=13; fi
-          echo "ANDROID_VER=$VER" >> $GITHUB_ENV
-
-      - name: Setup Toolchain
-        run: |
-          cd $KERNEL_DIR
-          mkdir toolchain
-          cd toolchain
-          bash <(curl -s "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman") -S=10032024
-          bash <(curl -s "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman") --patch=glibc
-          TC=$(find $PWD -type d -name "*clang*" | head -n 1)
-          echo "TC_PATH=$TC/bin" >> $GITHUB_ENV
+          mkdir clang
+          cd clang
+          bash <(curl -s https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman) -S=10032024
+          TC=$(find . -type d -name "*clang*" | head -n 1)
+          echo "CLANG=$(pwd)/$TC/bin" >> $GITHUB_ENV
 
       - name: Integrate KernelSU
         run: |
           cd $KERNEL_DIR
-          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          curl -LSs https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh | bash -
 
-      - name: Integrate SukiSU
+      - name: Integrate SukiSU (FIXED)
         run: |
-          cd $KERNEL_DIR/drivers
-          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
+          cd $KERNEL_DIR
+          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
 
-          if ! grep -q "sukisu" Kconfig; then
-            echo 'source "drivers/sukisu/Kconfig"' >> Kconfig
+          mkdir -p drivers/sukisu
+          cp -r SukiSU-Ultra/kernel/* drivers/sukisu/
+
+          if ! grep -q "sukisu" drivers/Kconfig; then
+            echo 'source "drivers/sukisu/Kconfig"' >> drivers/Kconfig
           fi
 
-          if ! grep -q "sukisu" Makefile; then
-            echo 'obj-$(CONFIG_KSU) += sukisu/' >> Makefile
+          if ! grep -q "sukisu" drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += sukisu/' >> drivers/Makefile
           fi
 
       - name: Detect Defconfig
         run: |
           cd $KERNEL_DIR
-          DEF=$(ls arch/arm64/configs | grep -Ei "a22|a225|mt" | head -n 1)
+          DEF=$(ls arch/arm64/configs | head -n 1)
           echo "DEFCONFIG=$DEF" >> $GITHUB_ENV
 
       - name: Set Version
         run: |
           DATE=$(date +%Y%m%d)
-          VERSION=SM-A225F_natkernel_A${ANDROID_VER}_${DATE}_r${GITHUB_RUN_NUMBER}
-          echo "KERNEL_NAME=$VERSION" >> $GITHUB_ENV
-          echo "BUILD_DATE=$(date)" >> $GITHUB_ENV
+          echo "KERNEL_NAME=natkernel_${DATE}_r${GITHUB_RUN_NUMBER}" >> $GITHUB_ENV
 
-      - name: Build Kernel
+      - name: Build Kernel (HYBRID GCC + CLANG)
         run: |
           cd $KERNEL_DIR
-          export PATH=$TC_PATH:$PATH
+          export PATH=$CLANG:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
 
           make O=out $DEFCONFIG
 
           echo 'CONFIG_LOCALVERSION="-natkernel-testing"' >> out/.config
-          echo 'CONFIG_LOCALVERSION_AUTO=n' >> out/.config
           echo 'CONFIG_KSU=y' >> out/.config
 
-          make -j$(nproc) O=out CC=clang CROSS_COMPILE=aarch64-linux-gnu- CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          make -j$(nproc) O=out \
+            CC=clang \
+            LD=ld.lld \
+            CROSS_COMPILE=$GCC64 \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
       - name: Pack boot.img
         run: |
@@ -124,13 +110,13 @@ jobs:
           mkbootimg --kernel Image.gz-dtb --ramdisk ramdisk.cpio.gz --output ${KERNEL_NAME}.img || true
           echo "BOOT=$(pwd)/${KERNEL_NAME}.img" >> $GITHUB_ENV
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: natkernel-a22
+          name: natkernel
           path: ${{ env.BOOT }}
 
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.KERNEL_NAME }}
