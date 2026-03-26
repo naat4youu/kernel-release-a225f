@@ -24,15 +24,28 @@ jobs:
           TAR=$(find . -name "Kernel.tar.gz" | head -n 1)
           tar -xzf "$TAR"
 
-          DIR=$(find . -type f -name Makefile | grep -v toolchain | head -n 1 | sed 's|/Makefile||')
-          cd $DIR
+          echo "Searching kernel root..."
 
-          echo "KERNEL_DIR=$PWD" >> $GITHUB_ENV
-          ls
+          FOUND=""
+          for d in $(find . -type d); do
+            if [ -f "$d/Makefile" ] && [ -d "$d/arch" ] && [ -d "$d/drivers" ]; then
+              FOUND="$d"
+              break
+            fi
+          done
+
+          if [ -z "$FOUND" ]; then
+            echo "Kernel root not found"
+            exit 1
+          fi
+
+          echo "FOUND KERNEL ROOT: $FOUND"
+          echo "KERNEL_DIR=$FOUND" >> $GITHUB_ENV
 
       - name: Verify Kernel
         run: |
           cd $KERNEL_DIR
+          ls
           test -d drivers || (echo "drivers missing" && exit 1)
           test -d arch || (echo "arch missing" && exit 1)
 
