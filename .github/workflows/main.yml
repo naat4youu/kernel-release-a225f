@@ -21,14 +21,10 @@ jobs:
           wget https://github.com/naat4youu/kernel-release-a225f/releases/download/skibidi1/SM-A225F_EUR_13_Opensource.zip -O source.zip
           unzip source.zip
 
-          DIR=$(find . -type f -name Makefile | grep -m1 "/kernel/Makefile" | sed 's|/Makefile||')
-          if [ -z "$DIR" ]; then
-            DIR=$(find . -type d -name kernel | head -n 1)
-          fi
-
+          DIR=$(find . -type f -name Makefile | head -n 1 | sed 's|/Makefile||')
           cd $DIR
-          ls
           echo "KERNEL_DIR=$PWD" >> $GITHUB_ENV
+          ls
 
       - name: Detect Android Version
         run: |
@@ -47,27 +43,22 @@ jobs:
           TC=$(find $PWD -type d -name "*clang*" | head -n 1)
           echo "TC_PATH=$TC/bin" >> $GITHUB_ENV
 
-      - name: Verify Kernel Path
-        run: |
-          cd $KERNEL_DIR
-          test -d drivers || (echo "drivers folder missing" && exit 1)
-
       - name: Integrate KernelSU
         run: |
           cd $KERNEL_DIR
           curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
 
-      - name: Integrate SukiSU
+      - name: Integrate SukiSU (arch drivers fix)
         run: |
-          cd $KERNEL_DIR/drivers
+          cd $KERNEL_DIR/arch/drivers
           git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git sukisu
 
-          if ! grep -q "sukisu" ../drivers/Kconfig; then
-            echo 'source "drivers/sukisu/Kconfig"' >> ../drivers/Kconfig
+          if ! grep -q "sukisu" Kconfig; then
+            echo 'source "arch/drivers/sukisu/Kconfig"' >> Kconfig
           fi
 
-          if ! grep -q "sukisu" ../drivers/Makefile; then
-            echo 'obj-$(CONFIG_KSU) += sukisu/' >> ../drivers/Makefile
+          if ! grep -q "sukisu" Makefile; then
+            echo 'obj-$(CONFIG_KSU) += sukisu/' >> Makefile
           fi
 
       - name: Detect Defconfig
@@ -116,23 +107,11 @@ jobs:
           name: natkernel-a22
           path: ${{ env.BOOT }}
 
-      - name: Generate Changelog
-        run: |
-          echo "NatKernel KernelSU + SukiSU Build" > changelog.txt
-          echo "" >> changelog.txt
-          echo "Device: Samsung Galaxy A22 4G (A225F)" >> changelog.txt
-          echo "Android Version: $ANDROID_VER" >> changelog.txt
-          echo "Build: $KERNEL_NAME" >> changelog.txt
-          echo "Date: $BUILD_DATE" >> changelog.txt
-          echo "Compiler: Neutron Clang" >> changelog.txt
-          echo "Root: KernelSU + SukiSU Ultra" >> changelog.txt
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.KERNEL_NAME }}
           name: ${{ env.KERNEL_NAME }}
-          body_path: changelog.txt
           files: ${{ env.BOOT }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
